@@ -1,5 +1,6 @@
 import { Logger } from 'nestjs-pino';
 import { NestFactory } from '@nestjs/core';
+import * as cookieParser from 'cookie-parser';
 import { ConfigService } from '@nestjs/config';
 import { ValidationPipe } from '@nestjs/common';
 
@@ -14,6 +15,7 @@ async function bootstrap() {
     }),
   );
   app.useLogger(app.get(Logger));
+  app.use(cookieParser());
 
   const configService = app.get(ConfigService);
 

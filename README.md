@@ -11,16 +11,26 @@
     - [2.3 - Reservations CRUD](#23---reservations-crud)
     - [2.4 - Validation \& Logging](#24---validation--logging)
     - [2.5 - Dockerize](#25---dockerize)
+  - [3 - Authentication](#3---authentication)
+    - [3.1 - Users](#31---users)
+    - [3.2 - Passport](#32---passport)
+    - [3.3 - Local Strategy](#33---local-strategy)
+    - [3.4 - JWT Strategy](#34---jwt-strategy)
+    - [3.5 - Common Auth Guard](#35---common-auth-guard)
 
 ## Resources
 
 - https://github.com/mguay22/sleepr
 
 ```BASH
-npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty
+npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty bcryptjs @nestjs/passport passport passport-local bcryptjs cookie-parser @nestjs/jwt passport-jwt @nestjs/microservices
 ```
 
-Abrir windows terminal como administrador
+```BASH
+npm install -D @types/bcryptjs @types/cookie-parser @types/passport-local @types/bcryptjs @types/passport-jwt
+```
+
+Abrir windows terminal como administrador para ejecutar MongoDB en la terminal
 
 ```BASH
 mongod --dbpath=data/db
@@ -605,5 +615,991 @@ docker-compose up
 ![](docs/images/img14.png)
 
 ![](docs/images/img15.png)
+
+## 3 - Authentication
+
+- https://docs.nestjs.com/techniques/cookies
+- https://docs.nestjs.com/microservices/basics
+
+### 3.1 - Users
+
+```BASH
+npm install bcryptjs cookie-parser
+npm install -D @types/bcryptjs @types/cookie-parser
+```
+
+```BASH
+nest generate app auth
+```
+
+![](docs/images/img17.png)
+
+```JSON
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "apps/reservations/src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "webpack": true,
+    "tsConfigPath": "apps/reservations/tsconfig.app.json"
+  },
+  "projects": {
+    "common": {
+      "type": "library",
+      "root": "libs/common",
+      "entryFile": "index",
+      "sourceRoot": "libs/common/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/common/tsconfig.lib.json"
+      }
+    },
+    "reservations": {
+      "type": "application",
+      "root": "apps/reservations",
+      "entryFile": "main",
+      "sourceRoot": "apps/reservations/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/reservations/tsconfig.app.json"
+      }
+    },
+    "auth": {
+      "type": "application",
+      "root": "apps/auth",
+      "entryFile": "main",
+      "sourceRoot": "apps/auth/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/auth/tsconfig.app.json"
+      }
+    }
+  },
+  "monorepo": true,
+  "root": "apps/reservations"
+}
+```
+
+```BASH
+nest generate module users
+nest generate controller users
+nest generate service users
+```
+
+![](docs/images/img18.png)
+
+Vamos a crear una especie de token con el módulo crypto de nodejs
+
+```BASH
+node
+
+Welcome to Node.js v18.17.1.
+Type ".help" for more information.
+
+require("crypto").randomBytes(64).toString("hex")
+
+'f72bfd2b07a00114df02e0827f7053bb6490470cd1f37a53d1ab8cb03e9c4f1467e313bb330a220c12249dfcb649516835e209ba14a0848ab9b54f5e6d8a7158'
+```
+
+`./apps/auth/.env`
+
+```BASH
+HTTP_PORT=5000
+TCP_PORT=5001
+
+JWT_SECRET=f72bfd2b07a00114df02e0827f7053bb6490470cd1f37a53d1ab8cb03e9c4f1467e313bb330a220c12249dfcb649516835e209ba14a0848ab9b54f5e6d8a7158
+JWT_EXPIRATION=3600
+
+MONGODB_URI=mongodb://mongo/nestjs-microservices-build-and-deploy-scaleable-backend
+# MONGODB_URI=mongodb://mongo:27017/nestjs-microservices-build-and-deploy-scaleable-backend
+```
+
+`./apps/reservations/.env`
+
+```BASH
+PORT=4000
+
+PAYMENTS_HOST=payments
+PAYMENTS_PORT=6000
+
+AUTH_HOST=auth
+AUTH_PORT=5000
+
+MONGODB_URI=mongodb://mongo/nestjs-microservices-build-and-deploy-scaleable-backend
+# MONGODB_URI=mongodb://mongo:27017/nestjs-microservices-build-and-deploy-scaleable-backend
+# MONGODB_URI=mongodb://127.0.0.1/nestjs-microservices-build-and-deploy-scaleable-backend
+```
+
+`docker-compose.yml`
+
+```YML
+services:
+  reservations:
+    build:
+      context: .
+      dockerfile: ./apps/reservations/Dockerfile
+      target: development
+    command: npm run start:dev reservations
+    env_file:
+      - ./apps/reservations/.env
+    ports:
+      - '4000:4000'
+    volumes:
+      - .:/usr/src/app
+  auth:
+    build:
+      context: .
+      dockerfile: ./apps/auth/Dockerfile
+      target: development
+    command: npm run start:dev auth
+    env_file:
+      - ./apps/auth/.env
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/usr/src/app
+  mongo:
+    image: mongo
+```
+
+POST - http://localhost:5000/users
+
+```JSON
+{
+  "email": "admin@email.com",
+  "password": "@LORDmaster0"
+}
+```
+
+![](docs/images/img19.png)
+
+### 3.2 - Passport
+
+```BASH
+npm install @nestjs/passport passport passport-local @nestjs/jwt passport-jwt
+npm install -D @types/passport-local @types/passport-jwt
+```
+
+`./libs/common/src/database/database.module.ts`
+
+```TS
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { ModelDefinition, MongooseModule } from '@nestjs/mongoose';
+
+@Module({
+  imports: [
+    MongooseModule.forRootAsync({
+      useFactory: (configService: ConfigService) => ({
+        uri: configService.get('MONGODB_URI'),
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+})
+export class DatabaseModule {
+  static forFeature(models: ModelDefinition[]) {
+    return MongooseModule.forFeature(models);
+  }
+}
+```
+
+`./apps/auth/src/auth.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { LoggerModule } from '@app/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+
+import { UsersModule } from './users/users.module';
+
+@Module({
+  imports: [
+    UsersModule,
+    LoggerModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        MONGODB_URI: Joi.string().required(),
+        JWT_SECRET: Joi.string().required(),
+        JWT_EXPIRATION: Joi.string().required(),
+        HTTP_PORT: Joi.number().required(),
+        TCP_PORT: Joi.number().required(),
+      }),
+    }),
+    JwtModule.registerAsync({
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: `${configService.get('JWT_EXPIRATION')}s`,
+        },
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService],
+})
+export class AuthModule {}
+```
+
+`./apps/reservations/src/reservations.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { DatabaseModule, LoggerModule } from '@app/common';
+
+import { ReservationsService } from './reservations.service';
+import { ReservationsRepository } from './reservations.repository';
+import { ReservationsController } from './reservations.controller';
+import {
+  ReservationDocument,
+  ReservationSchema,
+} from './models/reservation.schema';
+
+@Module({
+  imports: [
+    DatabaseModule,
+    DatabaseModule.forFeature([
+      { name: ReservationDocument.name, schema: ReservationSchema },
+    ]),
+    LoggerModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        MONGODB_URI: Joi.string().required(),
+        PORT: Joi.number().required(),
+        AUTH_HOST: Joi.string().required(),
+        PAYMENTS_HOST: Joi.string().required(),
+        AUTH_PORT: Joi.number().required(),
+        PAYMENTS_PORT: Joi.number().required(),
+      }),
+    }),
+  ],
+  controllers: [ReservationsController],
+  providers: [ReservationsService, ReservationsRepository],
+})
+export class ReservationsModule {}
+```
+
+### 3.3 - Local Strategy
+
+```BASH
+npm install bcryptjs
+npm install -D @types/bcryptjs
+```
+
+```BASH
+nest generate guard guards/local-auth --flat
+nest generate guard guards/jwt-auth --flat
+```
+
+![](docs/images/img20.png)
+
+`./apps/auth/src/strategies/local.strategy.ts`
+
+```TS
+import { Strategy } from 'passport-local';
+import { PassportStrategy } from '@nestjs/passport';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+
+import { UsersService } from '../users/users.service';
+
+@Injectable()
+export class LocalStategy extends PassportStrategy(Strategy) {
+  constructor(private readonly usersService: UsersService) {
+    super({ usernameField: 'email' });
+  }
+
+  async validate(email: string, password: string) {
+    try {
+      return await this.usersService.verifyUser(email, password);
+    } catch (err) {
+      throw new UnauthorizedException(err);
+    }
+  }
+}
+```
+
+`./apps/auth/src/strategies/jwt.strategy.ts`
+
+```TS
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+import { TokenPayload } from '../interfaces/token-payload.interface';
+
+import { UsersService } from '../users/users.service';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(
+    configService: ConfigService,
+    private readonly usersService: UsersService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: any) =>
+          request?.cookies?.Authentication ||
+          request?.Authentication ||
+          request?.headers.Authentication,
+      ]),
+      secretOrKey: configService.get('JWT_SECRET'),
+    });
+  }
+
+  async validate({ userId }: TokenPayload) {
+    return this.usersService.getUser({ _id: userId });
+  }
+}
+```
+
+`./libs/common/src/decorators/current-user.decorator.ts`
+
+```TS
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+import { UserDocument } from '../models/user.schema';
+
+const getCurrentUserByContext = (context: ExecutionContext): UserDocument => {
+  return context.switchToHttp().getRequest().user;
+};
+
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, context: ExecutionContext) =>
+    getCurrentUserByContext(context),
+);
+```
+
+`./apps/auth/src/auth.controller.ts`
+
+```TS
+import { Response } from 'express';
+import { CurrentUser, UserDocument } from '@app/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, Post, Res, UseGuards } from '@nestjs/common';
+
+import { LocalAuthGuard } from './guards/local-auth.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+import { AuthService } from './auth.service';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @UseGuards(LocalAuthGuard)
+  @Post('login')
+  async login(
+    @CurrentUser() user: UserDocument,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const jwt = await this.authService.login(user, response);
+    response.send(jwt);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @MessagePattern('authenticate')
+  async authenticate(@Payload() data: any) {
+    return data.user;
+  }
+}
+```
+
+Create an user
+
+POST - http://localhost:5000/users
+
+```JSON
+{
+    "email": "admin@email.com",
+    "password": "@LORDmaster0"
+}
+```
+
+POST - http://localhost:5000/auth/login
+
+```JSON
+{
+    "email": "admin@email.com",
+    "password": "@LORDmaster0"
+}
+```
+
+![](docs/images/img21.png)
+
+### 3.4 - JWT Strategy
+
+```BASH
+npm install cookie-parser
+npm install -D @types/cookie-parser
+```
+
+`./apps/auth/src/interfaces/token-payload.interface.ts`
+
+```TS
+export interface TokenPayload {
+  userId: string;
+}
+```
+
+`./apps/auth/src/guards/jwt-auth.guard.ts`
+
+```TS
+import { AuthGuard } from '@nestjs/passport';
+
+export class JwtAuthGuard extends AuthGuard('jwt') {}
+```
+
+`./apps/auth/src/users/dto/get-user.dto.ts`
+
+```TS
+import { IsNotEmpty, IsString } from 'class-validator';
+
+export class GetUserDto {
+  @IsString()
+  @IsNotEmpty()
+  _id: string;
+}
+```
+
+`./apps/auth/src/strategies/jwt.strategy.ts`
+
+```TS
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+import { TokenPayload } from '../interfaces/token-payload.interface';
+
+import { UsersService } from '../users/users.service';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(
+    configService: ConfigService,
+    private readonly usersService: UsersService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: any) =>
+          request?.cookies?.Authentication ||
+          request?.Authentication ||
+          request?.headers.Authentication,
+      ]),
+      secretOrKey: configService.get('JWT_SECRET'),
+    });
+  }
+
+  async validate({ userId }: TokenPayload) {
+    return this.usersService.getUser({ _id: userId });
+  }
+}
+```
+
+`./apps/auth/src/auth.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { LoggerModule } from '@app/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+
+import { LocalStategy } from './strategies/local.strategy';
+import { JwtStrategy } from './strategies/jwt.strategy';
+
+import { UsersModule } from './users/users.module';
+
+@Module({
+  imports: [
+    UsersModule,
+    LoggerModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        MONGODB_URI: Joi.string().required(),
+        JWT_SECRET: Joi.string().required(),
+        JWT_EXPIRATION: Joi.string().required(),
+        HTTP_PORT: Joi.number().required(),
+        TCP_PORT: Joi.number().required(),
+      }),
+    }),
+    JwtModule.registerAsync({
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: `${configService.get('JWT_EXPIRATION')}s`,
+        },
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, LocalStategy, JwtStrategy],
+})
+export class AuthModule {}
+```
+
+`./apps/auth/src/users/users.controller.ts`
+
+```TS
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { CurrentUser, UserDocument } from '@app/common';
+
+import { CreateUserDto } from './dto/create-user.dto';
+
+import { UsersService } from './users.service';
+import { JwtAuthGuard } from '../guards/jwt-auth.guard';
+
+@Controller('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  async createUser(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.create(createUserDto);
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  async getUser(@CurrentUser() user: UserDocument) {
+    return user;
+  }
+}
+```
+
+`./apps/auth/src/users/users.service.ts`
+
+```TS
+import {
+  Injectable,
+  UnauthorizedException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
+
+import { UsersRepository } from './users.repository';
+
+import { CreateUserDto } from './dto/create-user.dto';
+import { GetUserDto } from './dto/get-user.dto';
+
+@Injectable()
+export class UsersService {
+  constructor(private readonly usersRepository: UsersRepository) {}
+
+  async create(createUserDto: CreateUserDto) {
+    await this.validateCreateUserDto(createUserDto);
+
+    return this.usersRepository.create({
+      ...createUserDto,
+      password: await bcrypt.hash(createUserDto.password, 10),
+    });
+  }
+
+  private async validateCreateUserDto(createUserDto: CreateUserDto) {
+    try {
+      await this.usersRepository.findOne({ email: createUserDto.email });
+    } catch (err) {
+      return;
+    }
+    throw new UnprocessableEntityException('Email already exists.');
+  }
+
+  async verifyUser(email: string, password: string) {
+    const user = await this.usersRepository.findOne({ email });
+    const passwordIsValid = await bcrypt.compare(password, user.password);
+    if (!passwordIsValid) {
+      throw new UnauthorizedException('Credentials are not valid.');
+    }
+    return user;
+  }
+
+  async getUser(getUserDto: GetUserDto) {
+    return this.usersRepository.findOne(getUserDto);
+  }
+}
+```
+
+POST - http://localhost:5000/users
+
+```JSON
+{
+    "email": "admin@email.com",
+    "password": "@LORDmaster0"
+}
+```
+
+![](docs/images/img22.png)
+
+### 3.5 - Common Auth Guard
+
+```BASH
+npm install @nestjs/microservices
+```
+
+```BASH
+nest generate guard auth/jwt-auth --flat
+# Which project would you like to generate to? common
+```
+
+`./libs/common/src/constants/service.ts`
+
+```TS
+export const AUTH_SERVICE = 'auth';
+export const PAYMENTS_SERVICE = 'payments';
+export const NOTIFICATIONS_SERVICE = 'notifications';
+```
+
+`./libs/common/src/auth/jwt-auth.guard.ts`
+
+```TS
+import {
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ClientProxy } from '@nestjs/microservices';
+import { Observable, catchError, map, of, tap } from 'rxjs';
+
+import { UserDto } from '../dto';
+
+import { AUTH_SERVICE } from '../constants';
+
+@Injectable()
+export class JwtAuthGuard implements CanActivate {
+  private readonly logger = new Logger(JwtAuthGuard.name);
+
+  constructor(
+    @Inject(AUTH_SERVICE) private readonly authClient: ClientProxy,
+    private readonly reflector: Reflector,
+  ) {}
+
+  canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
+    const jwt =
+      context.switchToHttp().getRequest().cookies?.Authentication ||
+      context.switchToHttp().getRequest().headers?.authentication;
+
+    if (!jwt) {
+      return false;
+    }
+
+    const roles = this.reflector.get<string[]>('roles', context.getHandler());
+
+    return this.authClient
+      .send<UserDto>('authenticate', {
+        Authentication: jwt,
+      })
+      .pipe(
+        tap((res) => {
+          if (roles) {
+            for (const role of roles) {
+              if (!res.roles?.includes(role)) {
+                this.logger.error('The user does not have valid roles.');
+                throw new UnauthorizedException();
+              }
+            }
+          }
+          context.switchToHttp().getRequest().user = res;
+        }),
+        map(() => true),
+        catchError((err) => {
+          this.logger.error(err);
+          return of(false);
+        }),
+      );
+  }
+}
+```
+
+`./apps/auth/src/main.ts`
+
+```TS
+import { Logger } from 'nestjs-pino';
+import { NestFactory } from '@nestjs/core';
+import * as cookieParser from 'cookie-parser';
+import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
+import { Transport } from '@nestjs/microservices';
+
+import { AuthModule } from './auth.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AuthModule);
+  const configService = app.get(ConfigService);
+
+  const TCP_PORT = configService.get<number>('TCP_PORT');
+  const HTTP_PORT = configService.get<number>('HTTP_PORT');
+
+  app.use(cookieParser());
+  app.connectMicroservice({
+    transport: Transport.TCP,
+    options: {
+      host: '0.0.0.0',
+      port: TCP_PORT,
+    },
+  });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+    }),
+  );
+  app.useLogger(app.get(Logger));
+
+  await app.listen(HTTP_PORT);
+
+  console.log(`🚀 Server started on http://localhost:${HTTP_PORT}`);
+}
+bootstrap();
+```
+
+`./apps/auth/src/strategies/jwt.strategy.ts`
+
+```TS
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+import { TokenPayload } from '../interfaces/token-payload.interface';
+
+import { UsersService } from '../users/users.service';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(
+    configService: ConfigService,
+    private readonly usersService: UsersService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: any) =>
+          request?.cookies?.Authentication ||
+          request?.Authentication ||
+          request?.headers.Authentication,
+      ]),
+      secretOrKey: configService.get('JWT_SECRET'),
+    });
+  }
+
+  async validate({ userId }: TokenPayload) {
+    return this.usersService.getUser({ _id: userId });
+  }
+}
+```
+
+`./apps/reservations/src/main.ts`
+
+```TS
+import { Logger } from 'nestjs-pino';
+import { NestFactory } from '@nestjs/core';
+import * as cookieParser from 'cookie-parser';
+import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
+
+import { ReservationsModule } from './reservations.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(ReservationsModule);
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+    }),
+  );
+  app.useLogger(app.get(Logger));
+  app.use(cookieParser());
+
+  const configService = app.get(ConfigService);
+
+  const PORT = configService.get<number>('PORT');
+
+  await app.listen(PORT);
+
+  console.log(`🚀 Server started on http://localhost:${PORT}`);
+}
+bootstrap();
+```
+
+`./apps/reservations/src/reservations.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { DatabaseModule, LoggerModule, PAYMENTS_SERVICE } from '@app/common';
+
+import { ReservationsService } from './reservations.service';
+import { ReservationsRepository } from './reservations.repository';
+import { ReservationsController } from './reservations.controller';
+import {
+  ReservationDocument,
+  ReservationSchema,
+} from './models/reservation.schema';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+import { AUTH_SERVICE } from '@app/common';
+
+@Module({
+  imports: [
+    DatabaseModule,
+    DatabaseModule.forFeature([
+      { name: ReservationDocument.name, schema: ReservationSchema },
+    ]),
+    LoggerModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        MONGODB_URI: Joi.string().required(),
+        PORT: Joi.number().required(),
+        AUTH_HOST: Joi.string().required(),
+        PAYMENTS_HOST: Joi.string().required(),
+        AUTH_PORT: Joi.number().required(),
+        PAYMENTS_PORT: Joi.number().required(),
+      }),
+    }),
+    ClientsModule.registerAsync([
+      {
+        name: AUTH_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('AUTH_HOST'),
+            port: configService.get('AUTH_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+      {
+        name: PAYMENTS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('PAYMENTS_HOST'),
+            port: configService.get('PAYMENTS_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+    ]),
+  ],
+  controllers: [ReservationsController],
+  providers: [ReservationsService, ReservationsRepository],
+})
+export class ReservationsModule {}
+```
+
+`./apps/auth/src/auth.controller.ts`
+
+```TS
+import { Response } from 'express';
+import { CurrentUser, UserDocument } from '@app/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, Post, Res, UseGuards } from '@nestjs/common';
+
+import { LocalAuthGuard } from './guards/local-auth.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+import { AuthService } from './auth.service';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @UseGuards(LocalAuthGuard)
+  @Post('login')
+  async login(
+    @CurrentUser() user: UserDocument,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const jwt = await this.authService.login(user, response);
+    response.send(jwt);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @MessagePattern('authenticate')
+  async authenticate(@Payload() data: any) {
+    return data.user;
+  }
+}
+```
+
+POST - http://localhost:5000/users
+
+```JSON
+{
+  "email": "admin@email.com",
+  "password": "@LORDmaster0"
+}
+```
+
+![](docs/images/img19.png)
+
+POST - http://localhost:5000/auth/login
+
+```JSON
+{
+  "email": "admin@email.com",
+  "password": "@LORDmaster0"
+}
+```
+
+![](docs/images/img21.png)
+
+POST - http://localhost:4000/reservations
+
+```JSON
+{
+  "startDate": "12-20-2023",
+  "endDate": "12-25-2023",
+  "placeId": "333",
+  "invoiceId": "333"
+}
+```
+
+![](docs/images/img23.png)
+
+`./apps/reservations/src/reservations.controller.ts`
+
+```TS
+@Controller('reservations')
+export class ReservationsController {
+  constructor(private readonly reservationsService: ReservationsService) {}
+
+  @Post()
+  @UseGuards(JwtAuthGuard)
+  async create(
+    @Body() createReservationDto: CreateReservationDto,
+    @CurrentUser() user: UserDto,
+  ) {
+    const _user = await this.reservationsService.create(
+      createReservationDto,
+      user._id,
+    );
+
+    console.log(user);
+
+    return _user;
+  }
+}
+```
+
+![](docs/images/img24.png)
 
 ---

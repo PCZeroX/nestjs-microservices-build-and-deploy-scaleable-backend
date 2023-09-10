@@ -1,9 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
-// import { UserDto } from '@app/common';
 import { ReservationsRepository } from './reservations.repository';
-// import { map } from 'rxjs';
 
 @Injectable()
 export class ReservationsService {
@@ -13,6 +11,7 @@ export class ReservationsService {
 
   async create(
     createReservationDto: CreateReservationDto,
+    userId: string,
     // { email, _id: userId }: UserDto,
   ) {
     // return this.paymentsService
@@ -33,7 +32,7 @@ export class ReservationsService {
     return this.reservationsRepository.create({
       ...createReservationDto,
       timestamp: new Date(),
-      userId: '123',
+      userId,
     });
   }
 
