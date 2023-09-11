@@ -17,13 +17,17 @@
     - [3.3 - Local Strategy](#33---local-strategy)
     - [3.4 - JWT Strategy](#34---jwt-strategy)
     - [3.5 - Common Auth Guard](#35---common-auth-guard)
+  - [4 - Payments](#4---payments)
+    - [4.1 - Stripe Setup](#41---stripe-setup)
+    - [4.2 - Reservations Payments - Part 1](#42---reservations-payments---part-1)
+    - [4.3 - Reservations Payments - Part 2](#43---reservations-payments---part-2)
 
 ## Resources
 
 - https://github.com/mguay22/sleepr
 
 ```BASH
-npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty bcryptjs @nestjs/passport passport passport-local bcryptjs cookie-parser @nestjs/jwt passport-jwt @nestjs/microservices
+npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty bcryptjs @nestjs/passport passport passport-local bcryptjs cookie-parser @nestjs/jwt passport-jwt @nestjs/microservices stripe
 ```
 
 ```BASH
@@ -1601,5 +1605,804 @@ export class ReservationsController {
 ```
 
 ![](docs/images/img24.png)
+
+## 4 - Payments
+
+```BASH
+npm install stripe
+```
+
+```BASH
+nest generate app payments
+```
+
+![](docs/images/img26.png)
+
+- https://stripe.com/
+- https://stripe.com/docs/api
+- https://dashboard.stripe.com/
+- https://stripe.com/docs/api/versioning
+
+![](docs/images/img25.png)
+
+### 4.1 - Stripe Setup
+
+`docker-compose.yml`
+
+```YML
+services:
+  reservations:
+    build:
+      context: .
+      dockerfile: ./apps/reservations/Dockerfile
+      target: development
+    command: npm run start:dev reservations
+    env_file:
+      - ./apps/reservations/.env
+    ports:
+      - '4000:4000'
+    volumes:
+      - .:/usr/src/app
+  auth:
+    build:
+      context: .
+      dockerfile: ./apps/auth/Dockerfile
+      target: development
+    command: npm run start:dev auth
+    env_file:
+      - ./apps/auth/.env
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/usr/src/app
+  payments:
+    build:
+      context: .
+      dockerfile: ./apps/payments/Dockerfile
+      target: development
+    command: npm run start:dev payments
+    env_file:
+      - ./apps/payments/.env
+    volumes:
+      - .:/usr/src/app
+  mongo:
+    image: mongo
+```
+
+`./apps/payments/Dockerfile`
+
+```TS
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json ./
+COPY nest-cli.json ./
+
+RUN npm install
+
+COPY . .
+
+RUN npm run build
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/payments/main"]
+```
+
+`./apps/payments/.env`
+
+https://dashboard.stripe.com/test/apikeys
+
+```BASH
+PORT=6000
+
+NOTIFICATIONS_HOST=notifications
+NOTIFICATIONS_PORT=7001
+
+STRIPE_SECRET_KEY=sk_test_51NofyUA8JOq4rZnrxbi6YvPvyVWkq8KxBOYL9chIJxHzVY516bcBwrCI9jZwcclfyvX5qOAudcCckh3Z0geI3x2200kWujTqdV
+```
+
+`./apps/payments/src/payments.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+
+import { LoggerModule, NOTIFICATIONS_SERVICE } from '@app/common';
+
+import { PaymentsService } from './payments.service';
+import { PaymentsController } from './payments.controller';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        PORT: Joi.number().required(),
+        NOTIFICATIONS_HOST: Joi.string().required(),
+        NOTIFICATIONS_PORT: Joi.number().required(),
+        STRIPE_SECRET_KEY: Joi.string().required(),
+      }),
+    }),
+    LoggerModule,
+    ClientsModule.registerAsync([
+      {
+        name: NOTIFICATIONS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('NOTIFICATIONS_HOST'),
+            port: configService.get('NOTIFICATIONS_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+    ]),
+  ],
+  controllers: [PaymentsController],
+  providers: [PaymentsService],
+})
+export class PaymentsModule {}
+```
+
+`./apps/payments/src/payments.service.ts`
+
+```TS
+import Stripe from 'stripe';
+import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { ClientProxy } from '@nestjs/microservices';
+
+import { NOTIFICATIONS_SERVICE } from '@app/common';
+
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Injectable()
+export class PaymentsService {
+  private readonly stripe = new Stripe(
+    this.configService.get('STRIPE_SECRET_KEY'),
+    {
+      apiVersion: '2023-08-16',
+    },
+  );
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(NOTIFICATIONS_SERVICE)
+    private readonly notificationsService: ClientProxy,
+  ) {}
+
+  async createCharge({ card, amount, email }: PaymentsCreateChargeDto) {
+    const paymentMethod = await this.stripe.paymentMethods.create({
+      type: 'card',
+      card,
+    });
+
+    const paymentIntent = await this.stripe.paymentIntents.create({
+      payment_method: paymentMethod.id,
+      amount: amount * 100,
+      confirm: true,
+      payment_method_types: ['card'],
+      currency: 'usd',
+    });
+
+    this.notificationsService.emit('notify_email', {
+      email,
+      text: `Your payment of $${amount} has completed successfully.`,
+    });
+
+    return paymentIntent;
+  }
+}
+```
+
+`./apps/payments/src/payments.controller.ts`
+
+```TS
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, UsePipes, ValidationPipe } from '@nestjs/common';
+
+import { PaymentsService } from './payments.service';
+
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Controller()
+export class PaymentsController {
+  constructor(private readonly paymentsService: PaymentsService) {}
+
+  @MessagePattern('create_charge')
+  @UsePipes(new ValidationPipe())
+  async createCharge(@Payload() data: PaymentsCreateChargeDto) {
+    return this.paymentsService.createCharge(data);
+  }
+}
+```
+
+`./libs/common/src/dto/create-charge.dto.ts`
+
+```TS
+import { Type } from 'class-transformer';
+import {
+  IsDefined,
+  IsNotEmptyObject,
+  IsNumber,
+  ValidateNested,
+} from 'class-validator';
+import { CardDto } from './card.dto';
+
+export class CreateChargeDto {
+  @IsDefined()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => CardDto)
+  card: CardDto;
+
+  @IsNumber()
+  amount: number;
+}
+```
+
+### 4.2 - Reservations Payments - Part 1
+
+`./libs/common/src/constants/service.ts`
+
+```TS
+export const AUTH_SERVICE = 'auth';
+export const PAYMENTS_SERVICE = 'payments';
+export const NOTIFICATIONS_SERVICE = 'notifications';
+```
+
+`./apps/payments/src/payments.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+
+import { LoggerModule, NOTIFICATIONS_SERVICE } from '@app/common';
+
+import { PaymentsService } from './payments.service';
+import { PaymentsController } from './payments.controller';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        PORT: Joi.number().required(),
+        NOTIFICATIONS_HOST: Joi.string().required(),
+        NOTIFICATIONS_PORT: Joi.number().required(),
+        STRIPE_SECRET_KEY: Joi.string().required(),
+      }),
+    }),
+    LoggerModule,
+    ClientsModule.registerAsync([
+      {
+        name: NOTIFICATIONS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('NOTIFICATIONS_HOST'),
+            port: configService.get('NOTIFICATIONS_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+    ]),
+  ],
+  controllers: [PaymentsController],
+  providers: [PaymentsService],
+})
+export class PaymentsModule {}
+```
+
+`./apps/reservations/src/reservations.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import {
+  AUTH_SERVICE,
+  DatabaseModule,
+  LoggerModule,
+  PAYMENTS_SERVICE,
+} from '@app/common';
+
+import { ReservationsService } from './reservations.service';
+import { ReservationsRepository } from './reservations.repository';
+import { ReservationsController } from './reservations.controller';
+import {
+  ReservationDocument,
+  ReservationSchema,
+} from './models/reservation.schema';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+
+@Module({
+  imports: [
+    DatabaseModule,
+    DatabaseModule.forFeature([
+      { name: ReservationDocument.name, schema: ReservationSchema },
+    ]),
+    LoggerModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        MONGODB_URI: Joi.string().required(),
+        PORT: Joi.number().required(),
+        AUTH_HOST: Joi.string().required(),
+        PAYMENTS_HOST: Joi.string().required(),
+        AUTH_PORT: Joi.number().required(),
+        PAYMENTS_PORT: Joi.number().required(),
+      }),
+    }),
+    ClientsModule.registerAsync([
+      {
+        name: AUTH_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('AUTH_HOST'),
+            port: configService.get('AUTH_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+      {
+        name: PAYMENTS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('PAYMENTS_HOST'),
+            port: configService.get('PAYMENTS_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+    ]),
+  ],
+  controllers: [ReservationsController],
+  providers: [ReservationsService, ReservationsRepository],
+})
+export class ReservationsModule {}
+```
+
+`./apps/reservations/.env`
+
+```TS
+PORT=4000
+
+AUTH_HOST=auth
+AUTH_PORT=5001
+
+PAYMENTS_HOST=payments
+PAYMENTS_PORT=6001
+
+MONGODB_URI=mongodb://mongo/nestjs-microservices-build-and-deploy-scaleable-backend
+```
+
+`./libs/common/src/dto/card.dto.ts`
+
+```TS
+import { IsCreditCard, IsNotEmpty, IsNumber, IsString } from 'class-validator';
+
+export class CardDto {
+  @IsString()
+  @IsNotEmpty()
+  cvc: string;
+
+  @IsNumber()
+  exp_month: number;
+
+  @IsNumber()
+  exp_year: number;
+
+  @IsCreditCard()
+  number: string;
+}
+```
+
+`./libs/common/src/dto/create-charge.dto.ts`
+
+```TS
+import { Type } from 'class-transformer';
+import {
+  IsDefined,
+  IsNotEmptyObject,
+  IsNumber,
+  ValidateNested,
+} from 'class-validator';
+import { CardDto } from './card.dto';
+
+export class CreateChargeDto {
+  @IsDefined()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => CardDto)
+  card: CardDto;
+
+  @IsNumber()
+  amount: number;
+}
+```
+
+`./apps/reservations/src/dto/create-reservation.dto.ts`
+
+```TS
+import { Type } from 'class-transformer';
+import {
+  IsDate,
+  IsDefined,
+  IsNotEmpty,
+  IsNotEmptyObject,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
+
+import { CreateChargeDto } from '@app/common';
+
+export class CreateReservationDto {
+  @IsDate()
+  @Type(() => Date)
+  startDate: Date;
+
+  @IsDate()
+  @Type(() => Date)
+  endDate: Date;
+
+  @IsString()
+  @IsNotEmpty()
+  placeId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  invoiceId: string;
+
+  @IsDefined()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => CreateChargeDto)
+  charge: CreateChargeDto;
+}
+```
+
+POST - http://localhost:4000/reservations
+
+```JSON
+{
+    "startDate": "12-20-2023",
+    "endDate": "12-25-2023",
+    "placeId": "111",
+    "invoiceId": "111",
+    "charge": {
+        "amount": 50,
+        "card": {
+            "cvc": "987",
+            "exp_month": 12,
+            "exp_year": 2030,
+            "number": "4242 4242 4242 4242"
+        }
+    }
+}
+```
+
+![](docs/images/img27.png)
+
+### 4.3 - Reservations Payments - Part 2
+
+**OBSERVACIÓN**
+
+- https://stripe.com/docs/upgrades#2023-08-16
+- https://stripe.com/docs/testing?testing-method=tokens
+- https://stripe.com/docs/testing?testing-method=payment-methods
+
+Actualmenhte, en la versión `2023-08-16` de Stripe, ha cambiado el proceso de pagos, por lo cual no se pudo seguir el proyecto
+
+```JSON
+{
+  "error": "ERROR (81): Sending credit card numbers directly to the Stripe API is generally unsafe. We suggest you use test tokens that map to the test card you are using, see https://stripe.com/docs/testing. To enable raw card data APIs in test mode, see https://support.stripe.com/questions/enabling-access-to-raw-card-data-apis"
+}
+```
+
+Posibles soluciones ante este mismo error
+
+- https://stackoverflow.com/questions/76688379/rails-api-only-with-stripe-api-integration-error-sending-credit-card-numbers-di
+
+Esto es lo que hizo funcionar
+
+`./apps/payments/src/payments.service.ts`
+
+```TS
+import Stripe from 'stripe';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { CreateChargeDto } from '@app/common';
+
+@Injectable()
+export class PaymentsService {
+  private readonly stripe = new Stripe(
+    this.configService.get('STRIPE_SECRET_KEY'),
+    {
+      apiVersion: '2023-08-16',
+      typescript: true,
+    },
+  );
+
+  constructor(private readonly configService: ConfigService) {}
+
+  async createCharge({ amount }: CreateChargeDto) {
+
+    const paymentIntent = await this.stripe.paymentIntents.create({
+      payment_method: 'pm_card_visa', // Esto es lo que se agregó
+      amount: amount * 100,
+      confirm: true,
+      payment_method_types: ['card'],
+      currency: 'usd',
+    });
+
+    return paymentIntent;
+  }
+}
+```
+
+![](docs/images/img28.png)
+
+![](docs/images/img29.png)
+
+Posteriormente, aquí sigue con el proceso del proyecto
+
+POST - http://localhost:4000/reservations
+
+```JSON
+{
+    "startDate": "12-20-2023",
+    "endDate": "12-25-2023",
+    "placeId": "111",
+    "invoiceId": "111",
+    "charge": {
+        "amount": 5,
+        "card": {
+            "cvc": "123",
+            "exp_month": 12,
+            "exp_year": 2030,
+            "number": "4242 4242 4242 4242"
+        }
+    }
+}
+```
+
+`./libs/common/src/auth/jwt-auth.guard.ts`
+
+```TS
+import {
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
+import { Observable, catchError, map, of, tap } from 'rxjs';
+
+import { UserDto } from '../dto';
+
+import { AUTH_SERVICE } from '../constants';
+
+@Injectable()
+export class JwtAuthGuard implements CanActivate {
+  private readonly logger = new Logger(JwtAuthGuard.name);
+
+  constructor(@Inject(AUTH_SERVICE) private readonly authClient: ClientProxy) {}
+
+  canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
+    const jwt = context.switchToHttp().getRequest().cookies?.Authentication;
+
+    if (!jwt) {
+      return false;
+    }
+
+    return this.authClient
+      .send<UserDto>('authenticate', {
+        Authentication: jwt,
+      })
+      .pipe(
+        tap((res) => {
+          context.switchToHttp().getRequest().user = res;
+        }),
+        map(() => true),
+        catchError(() => of(false)),
+      );
+  }
+}
+```
+
+`./apps/payments/src/payments.controller.ts`
+
+```TS
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, UsePipes, ValidationPipe } from '@nestjs/common';
+
+import { PaymentsService } from './payments.service';
+
+import { CreateChargeDto } from '@app/common';
+
+@Controller()
+export class PaymentsController {
+  constructor(private readonly paymentsService: PaymentsService) {}
+
+  @MessagePattern('create_charge')
+  @UsePipes(new ValidationPipe())
+  async createCharge(
+    @Payload() data: CreateChargeDto,
+  ) {
+    return this.paymentsService.createCharge(data);
+  }
+}
+```
+
+`./apps/reservations/src/dto/create-reservation.dto.ts`
+
+```TS
+import { Type } from 'class-transformer';
+import {
+  IsDate,
+  IsDefined,
+  IsNotEmptyObject,
+  ValidateNested,
+} from 'class-validator';
+
+import { CreateChargeDto } from '@app/common';
+
+export class CreateReservationDto {
+  @IsDate()
+  @Type(() => Date)
+  startDate: Date;
+
+  @IsDate()
+  @Type(() => Date)
+  endDate: Date;
+
+  @IsDefined()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => CreateChargeDto)
+  charge: CreateChargeDto;
+}
+```
+
+`./apps/reservations/src/models/reservation.schema.ts`
+
+```TS
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { AbstractDocument } from '@app/common';
+
+@Schema({ versionKey: false })
+export class ReservationDocument extends AbstractDocument {
+  @Prop()
+  timestamp: Date;
+
+  @Prop()
+  startDate: Date;
+
+  @Prop()
+  endDate: Date;
+
+  @Prop()
+  userId: string;
+
+  @Prop()
+  invoiceId: string;
+}
+
+export const ReservationSchema =
+  SchemaFactory.createForClass(ReservationDocument);
+```
+
+`./apps/reservations/src/reservations.service.ts`
+
+```TS
+import { map } from 'rxjs';
+import { ClientProxy } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { PAYMENTS_SERVICE } from '@app/common';
+
+import { CreateReservationDto } from './dto/create-reservation.dto';
+import { UpdateReservationDto } from './dto/update-reservation.dto';
+
+import { ReservationsRepository } from './reservations.repository';
+
+@Injectable()
+export class ReservationsService {
+  constructor(
+    private readonly reservationsRepository: ReservationsRepository,
+    @Inject(PAYMENTS_SERVICE) private readonly paymentsService: ClientProxy,
+  ) {}
+
+  async create(
+    createReservationDto: CreateReservationDto,
+    userId: string,
+  ) {
+    return this.paymentsService
+      .send('create_charge', createReservationDto.charge)
+      .pipe(
+        map((res) => {
+          return this.reservationsRepository.create({
+            ...createReservationDto,
+            invoiceId: res.id,
+            timestamp: new Date(),
+            userId,
+          });
+        }),
+      );
+  }
+
+  async findAll() {
+    return this.reservationsRepository.find({});
+  }
+
+  async findOne(_id: string) {
+    return this.reservationsRepository.findOne({ _id });
+  }
+
+  async update(_id: string, updateReservationDto: UpdateReservationDto) {
+    return this.reservationsRepository.findOneAndUpdate(
+      { _id },
+      { $set: updateReservationDto },
+    );
+  }
+
+  async remove(_id: string) {
+    return this.reservationsRepository.findOneAndDelete({ _id });
+  }
+}
+```
+
+POST - http://localhost:4000/reservations
+
+```JSON
+{
+    "startDate": "12-20-2023",
+    "endDate": "12-25-2023",
+    "placeId": "111",
+    "invoiceId": "111",
+    "charge": {
+        "amount": 5,
+        "card": {
+            "cvc": "123",
+            "exp_month": 12,
+            "exp_year": 2030,
+            "number": "4242 4242 4242 4242"
+        }
+    }
+}
+```
+
+![](docs/images/img28.png)
+
+![](docs/images/img29.png)
 
 ---
