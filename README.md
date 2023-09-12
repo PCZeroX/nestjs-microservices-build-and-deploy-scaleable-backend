@@ -21,17 +21,20 @@
     - [4.1 - Stripe Setup](#41---stripe-setup)
     - [4.2 - Reservations Payments - Part 1](#42---reservations-payments---part-1)
     - [4.3 - Reservations Payments - Part 2](#43---reservations-payments---part-2)
+  - [5 - Notifications](#5---notifications)
+    - [5.1 - Emit Notification](#51---emit-notification)
+    - [5.2 - Email Notification](#52---email-notification)
 
 ## Resources
 
 - https://github.com/mguay22/sleepr
 
 ```BASH
-npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty bcryptjs @nestjs/passport passport passport-local bcryptjs cookie-parser @nestjs/jwt passport-jwt @nestjs/microservices stripe
+npm install winston winston-daily-rotate-file @nestjs/config cross-env @nestjs/mongoose mongoose @nestjs/config class-transformer class-validator nestjs-pino pino-http pino-pretty bcryptjs @nestjs/passport passport passport-local bcryptjs cookie-parser @nestjs/jwt passport-jwt @nestjs/microservices stripe nodemailer
 ```
 
 ```BASH
-npm install -D @types/bcryptjs @types/cookie-parser @types/passport-local @types/bcryptjs @types/passport-jwt
+npm install -D @types/bcryptjs @types/cookie-parser @types/passport-local @types/bcryptjs @types/passport-jwt @types/nodemailer
 ```
 
 Abrir windows terminal como administrador para ejecutar MongoDB en la terminal
@@ -2404,5 +2407,625 @@ POST - http://localhost:4000/reservations
 ![](docs/images/img28.png)
 
 ![](docs/images/img29.png)
+
+## 5 - Notifications
+
+```BASH
+nest generate app notifications
+```
+
+![](docs/images/img30.png)
+
+### 5.1 - Emit Notification
+
+`docker-compose.yml`
+
+```YML
+services:
+  reservations:
+    build:
+      context: .
+      dockerfile: ./apps/reservations/Dockerfile
+      target: development
+    command: npm run start:dev reservations
+    env_file:
+      - ./apps/reservations/.env
+    ports:
+      - '4000:4000'
+    volumes:
+      - .:/usr/src/app
+  auth:
+    build:
+      context: .
+      dockerfile: ./apps/auth/Dockerfile
+      target: development
+    command: npm run start:dev auth
+    env_file:
+      - ./apps/auth/.env
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/usr/src/app
+  payments:
+    build:
+      context: .
+      dockerfile: ./apps/payments/Dockerfile
+      target: development
+    command: npm run start:dev payments
+    env_file:
+      - ./apps/payments/.env
+    volumes:
+      - .:/usr/src/app
+  notifications:
+    build:
+      context: .
+      dockerfile: ./apps/notifications/Dockerfile
+      target: development
+    command: npm run start:dev notifications
+    env_file:
+      - ./apps/notifications/.env
+    volumes:
+      - .:/usr/src/app
+  mongo:
+    image: mongo
+```
+
+`./apps/notifications/Dockerfile`
+
+```TS
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json ./
+COPY nest-cli.json ./
+
+RUN npm install
+
+COPY . .
+
+RUN npm run build
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/notifications/main"]
+```
+
+`./apps/notifications/src/notifications.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+
+import { LoggerModule } from '@app/common';
+
+import { NotificationsService } from './notifications.service';
+import { NotificationsController } from './notifications.controller';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        PORT: Joi.number().required(),
+        GOOGLE_OAUTH_CLIENT_ID: Joi.string().required(),
+        GOOGLE_OAUTH_CLIENT_SECRET: Joi.string().required(),
+        GOOGLE_OAUTH_REFRESH_TOKEN: Joi.string().required(),
+        SMTP_USER: Joi.string().required(),
+      }),
+    }),
+    LoggerModule,
+  ],
+  controllers: [NotificationsController],
+  providers: [NotificationsService],
+})
+export class NotificationsModule {}
+```
+
+`./apps/notifications/src/dto/notify-email.dto.ts`
+
+```TS
+import { IsEmail, IsString } from 'class-validator';
+
+export class NotifyEmailDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  text: string;
+}
+```
+
+`./apps/payments/src/payments.module.ts`
+
+```TS
+import * as Joi from 'joi';
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+
+import { LoggerModule, NOTIFICATIONS_SERVICE } from '@app/common';
+
+import { PaymentsService } from './payments.service';
+import { PaymentsController } from './payments.controller';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        PORT: Joi.number().required(),
+        NOTIFICATIONS_HOST: Joi.string().required(),
+        NOTIFICATIONS_PORT: Joi.number().required(),
+        STRIPE_SECRET_KEY: Joi.string().required(),
+      }),
+    }),
+    LoggerModule,
+    ClientsModule.registerAsync([
+      {
+        name: NOTIFICATIONS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('NOTIFICATIONS_HOST'),
+            port: configService.get('NOTIFICATIONS_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+    ]),
+  ],
+  controllers: [PaymentsController],
+  providers: [PaymentsService],
+})
+export class PaymentsModule {}
+```
+
+`./apps/reservations/src/reservations.service.ts`
+
+```TS
+import { map } from 'rxjs';
+import { ClientProxy } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { PAYMENTS_SERVICE, UserDto } from '@app/common';
+
+import { CreateReservationDto } from './dto/create-reservation.dto';
+import { UpdateReservationDto } from './dto/update-reservation.dto';
+
+import { ReservationsRepository } from './reservations.repository';
+
+@Injectable()
+export class ReservationsService {
+  constructor(
+    private readonly reservationsRepository: ReservationsRepository,
+    @Inject(PAYMENTS_SERVICE) private readonly paymentsService: ClientProxy,
+  ) {}
+
+  async create(
+    createReservationDto: CreateReservationDto,
+    { email, _id: userId }: UserDto,
+  ) {
+    return this.paymentsService
+      .send('create_charge', { ...createReservationDto.charge, email })
+      .pipe(
+        map((res) => {
+          return this.reservationsRepository.create({
+            ...createReservationDto,
+            invoiceId: res.id,
+            timestamp: new Date(),
+            userId,
+          });
+        }),
+      );
+  }
+
+  async findAll() {
+    return this.reservationsRepository.find({});
+  }
+
+  async findOne(_id: string) {
+    return this.reservationsRepository.findOne({ _id });
+  }
+
+  async update(_id: string, updateReservationDto: UpdateReservationDto) {
+    return this.reservationsRepository.findOneAndUpdate(
+      { _id },
+      { $set: updateReservationDto },
+    );
+  }
+
+  async remove(_id: string) {
+    return this.reservationsRepository.findOneAndDelete({ _id });
+  }
+}
+```
+
+`./libs/common/src/dto/create-charge.dto.ts`
+
+```TS
+import { IsNumber } from 'class-validator';
+
+export class CreateChargeDto {
+  @IsNumber()
+  amount: number;
+}
+```
+
+`./apps/payments/src/dto/payments-create-charge.dto.ts`
+
+```TS
+import { IsEmail } from 'class-validator';
+
+import { CreateChargeDto } from '@app/common';
+
+export class PaymentsCreateChargeDto extends CreateChargeDto {
+  @IsEmail()
+  email: string;
+}
+```
+
+`./apps/payments/src/payments.service.ts`
+
+```TS
+import Stripe from 'stripe';
+import { ConfigService } from '@nestjs/config';
+import { ClientProxy } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { NOTIFICATIONS_SERVICE } from '@app/common';
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Injectable()
+export class PaymentsService {
+  private readonly stripe = new Stripe(
+    this.configService.get('STRIPE_SECRET_KEY'),
+    {
+      apiVersion: '2023-08-16',
+      typescript: true,
+    },
+  );
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(NOTIFICATIONS_SERVICE)
+    private readonly notificationsService: ClientProxy,
+  ) {}
+
+  async createCharge({ amount, email }: PaymentsCreateChargeDto) {
+    const paymentIntent = await this.stripe.paymentIntents.create({
+      payment_method: 'pm_card_visa',
+      amount: amount * 100,
+      confirm: true,
+      payment_method_types: ['card'],
+      currency: 'usd',
+    });
+
+    this.notificationsService.emit('notify_email', {
+      email,
+      text: `Your payment of $${amount} has completed successfully.`,
+    });
+
+    return paymentIntent;
+  }
+}
+```
+
+`./apps/payments/src/payments.controller.ts`
+
+```TS
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, UsePipes, ValidationPipe } from '@nestjs/common';
+
+import { PaymentsService } from './payments.service';
+
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Controller()
+export class PaymentsController {
+  constructor(private readonly paymentsService: PaymentsService) {}
+
+  @MessagePattern('create_charge')
+  @UsePipes(new ValidationPipe())
+  async createCharge(@Payload() data: PaymentsCreateChargeDto) {
+    return this.paymentsService.createCharge(data);
+  }
+}
+```
+
+`./apps/reservations/src/reservations.controller.ts`
+
+```TS
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+} from '@nestjs/common';
+import { CurrentUser, JwtAuthGuard, UserDto } from '@app/common';
+
+import { ReservationsService } from './reservations.service';
+import { CreateReservationDto } from './dto/create-reservation.dto';
+import { UpdateReservationDto } from './dto/update-reservation.dto';
+
+@Controller('reservations')
+export class ReservationsController {
+  constructor(private readonly reservationsService: ReservationsService) {}
+
+  @Post()
+  @UseGuards(JwtAuthGuard)
+  async create(
+    @Body() createReservationDto: CreateReservationDto,
+    @CurrentUser() user: UserDto,
+  ) {
+    return await this.reservationsService.create(createReservationDto, user);
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  async findAll() {
+    return this.reservationsService.findAll();
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  async findOne(@Param('id') id: string) {
+    return this.reservationsService.findOne(id);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  async update(
+    @Param('id') id: string,
+    @Body() updateReservationDto: UpdateReservationDto,
+  ) {
+    return this.reservationsService.update(id, updateReservationDto);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  async remove(@Param('id') id: string) {
+    return this.reservationsService.remove(id);
+  }
+}
+```
+
+### 5.2 - Email Notification
+
+```BASH
+npm install nodemailer
+npm install -D @types/nodemailer
+```
+
+Google Cloud Platform
+
+![](docs/images/img32.png)
+
+![](docs/images/img33.png)
+
+![](docs/images/img34.png)
+
+![](docs/images/img35.png)
+
+![](docs/images/img36.png)
+
+![](docs/images/img37.png)
+
+![](docs/images/img38.png)
+
+![](docs/images/img39.png)
+
+![](docs/images/img40.png)
+
+https://developers.google.com/oauthplayground
+
+![](docs/images/img41.png)
+
+![](docs/images/img42.png)
+
+https://developers.google.com/oauthplayground
+
+![](docs/images/img43.png)
+
+![](docs/images/img44.png)
+
+![](docs/images/img45.png)
+
+![](docs/images/img46.png)
+
+Le das click en el botón Continuar
+
+![](docs/images/img47.png)
+
+Le das click en el botón Continuar
+
+![](docs/images/img48.png)
+
+![](docs/images/img49.png)
+
+![](docs/images/img50.png)
+
+`./apps/notifications/src/dto/notify-email.dto.ts`
+
+```TS
+import { IsEmail, IsString } from 'class-validator';
+
+export class NotifyEmailDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  text: string;
+}
+```
+
+`./apps/payments/src/payments.service.ts`
+
+```TS
+import Stripe from 'stripe';
+import { ConfigService } from '@nestjs/config';
+import { ClientProxy } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { NOTIFICATIONS_SERVICE } from '@app/common';
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Injectable()
+export class PaymentsService {
+  private readonly stripe = new Stripe(
+    this.configService.get('STRIPE_SECRET_KEY'),
+    {
+      apiVersion: '2023-08-16',
+      typescript: true,
+    },
+  );
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(NOTIFICATIONS_SERVICE)
+    private readonly notificationsService: ClientProxy,
+  ) {}
+
+  async createCharge({ amount, email }: PaymentsCreateChargeDto) {
+    const paymentIntent = await this.stripe.paymentIntents.create({
+      payment_method: 'pm_card_visa',
+      amount: amount * 100,
+      confirm: true,
+      payment_method_types: ['card'],
+      currency: 'usd',
+    });
+
+    this.notificationsService.emit('notify_email', {
+      email,
+      text: `Your payment of $${amount} has completed successfully.`,
+    });
+
+    return paymentIntent;
+  }
+}
+```
+
+`./apps/payments/src/payments.controller.ts`
+
+```TS
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, UsePipes, ValidationPipe } from '@nestjs/common';
+
+import { PaymentsService } from './payments.service';
+
+import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
+
+@Controller()
+export class PaymentsController {
+  constructor(private readonly paymentsService: PaymentsService) {}
+
+  @MessagePattern('create_charge')
+  @UsePipes(new ValidationPipe())
+  async createCharge(@Payload() data: PaymentsCreateChargeDto) {
+    return this.paymentsService.createCharge(data);
+  }
+}
+```
+
+`./apps/notifications/src/notifications.service.ts`
+
+```TS
+import * as nodemailer from 'nodemailer';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { NotifyEmailDto } from './dto/notify-email.dto';
+
+@Injectable()
+export class NotificationsService {
+  constructor(private readonly configService: ConfigService) {}
+
+  private readonly transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: this.configService.get('SMTP_USER'),
+      clientId: this.configService.get('GOOGLE_OAUTH_CLIENT_ID'),
+      clientSecret: this.configService.get('GOOGLE_OAUTH_CLIENT_SECRET'),
+      refreshToken: this.configService.get('GOOGLE_OAUTH_REFRESH_TOKEN'),
+    },
+  });
+
+  async notifyEmail({ email, text }: NotifyEmailDto) {
+    await this.transporter.sendMail({
+      from: this.configService.get('SMTP_USER'),
+      to: email,
+      subject: 'Sleepr Notification',
+      text,
+    });
+  }
+}
+```
+
+`./apps/notifications/src/notifications.controller.ts`
+
+```TS
+import { EventPattern, Payload } from '@nestjs/microservices';
+import { NotificationsService } from './notifications.service';
+import { Controller, UsePipes, ValidationPipe } from '@nestjs/common';
+
+import { NotifyEmailDto } from './dto/notify-email.dto';
+
+@Controller()
+export class NotificationsController {
+  constructor(private readonly notificationsService: NotificationsService) {}
+
+  @EventPattern('notify_email')
+  @UsePipes(new ValidationPipe())
+  async notifyEmail(@Payload() data: NotifyEmailDto) {
+    this.notificationsService.notifyEmail(data);
+  }
+}
+```
+
+POST - http://localhost:4000/reservations
+
+```JSON
+{
+    "startDate": "12-20-2023",
+    "endDate": "12-25-2023",
+    "placeId": "111",
+    "invoiceId": "111",
+    "charge": {
+        "amount": 5,
+        "card": {
+            "cvc": "123",
+            "exp_month": 12,
+            "exp_year": 2030,
+            "number": "4242 4242 4242 4242"
+        }
+    }
+}
+```
+
+![](docs/images/img51.png)
+
+![](docs/images/img52.png)
 
 ---
