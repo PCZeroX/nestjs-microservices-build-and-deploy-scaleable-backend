@@ -3883,7 +3883,7 @@ steps:
     args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/payments/production']
 ```
 
-Otra alternativa es esta, pero hay problemas para que reconozca las variables. Debe revisar a profundidad más luego
+Otra alternativa es para que reconozca las variables. Debe revisar a profundidad más luego
 
 `cloudbuild.yaml`
 
@@ -3900,13 +3900,13 @@ steps:
       [
         'build',
         '-t',
-        '${_URL}/reservations',
+        '${_URL}/reservations/production',
         '-f',
         'apps/reservations/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '${_URL}/reservations']
+    args: ['push', '${_URL}/reservations/production']
 
   # Auth
   - name: 'gcr.io/cloud-builders/docker'
