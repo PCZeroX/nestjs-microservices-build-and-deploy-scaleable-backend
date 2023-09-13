@@ -3831,13 +3831,17 @@ steps:
       [
         'build',
         '-t',
-        'us-east4-docker.pkg.dev/civic-champion-398722/reservations',
+        'us-east4-docker.pkg.dev/civic-champion-398722/reservations/production',
         '-f',
         'apps/reservations/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/reservations']
+    args:
+      [
+        'push',
+        'us-east4-docker.pkg.dev/civic-champion-398722/reservations/production',
+      ]
 
   # Auth
   - name: 'gcr.io/cloud-builders/docker'
@@ -3851,7 +3855,8 @@ steps:
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/auth/production']
+    args:
+      ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/auth/production']
 
   # Notifications
   - name: 'gcr.io/cloud-builders/docker'
@@ -3866,7 +3871,10 @@ steps:
       ]
   - name: 'gcr.io/cloud-builders/docker'
     args:
-      ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production']
+      [
+        'push',
+        'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production',
+      ]
 
   # Payments
   - name: 'gcr.io/cloud-builders/docker'
@@ -3880,7 +3888,11 @@ steps:
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/payments/production']
+    args:
+      [
+        'push',
+        'us-east4-docker.pkg.dev/civic-champion-398722/payments/production',
+      ]
 ```
 
 Otra alternativa es para que reconozca las variables. Debe revisar a profundidad más luego
