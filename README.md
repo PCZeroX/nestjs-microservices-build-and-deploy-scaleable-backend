@@ -4039,4 +4039,10 @@ Revisar el dashboard cuando haya hecho un push del proyecto a repositorio de Git
 - https://console.cloud.google.com/cloud-build/dashboard?project=civic-champion-398722
 - https://github.com/PCZeroX/nestjs-microservices-build-and-deploy-scaleable-backend
 
+https://console.cloud.google.com/cloud-build/dashboard?authuser=1&project=civic-champion-398722
+
+![](docs/images/img112.png)
+
+![](docs/images/img111.png)
+
 ---
