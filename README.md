@@ -24,6 +24,10 @@
   - [5 - Notifications](#5---notifications)
     - [5.1 - Emit Notification](#51---emit-notification)
     - [5.2 - Email Notification](#52---email-notification)
+  - [6 - Production Deployment](#6---production-deployment)
+    - [6.1 - Google Cloud Engine Setup](#61---google-cloud-engine-setup)
+    - [6.2 - Productionize \& Push Dockerfile](#62---productionize--push-dockerfile)
+    - [6.3 - Automated CICD With CloudBuild](#63---automated-cicd-with-cloudbuild)
 
 ## Resources
 
@@ -43,6 +47,14 @@ Abrir windows terminal como administrador para ejecutar MongoDB en la terminal
 mongod --dbpath=data/db
 
 mongod --dbpath "C:\Program Files\MongoDB\Server\7.0\data\db"
+```
+
+Crear repositor en Github CLI siempre que lo tengas instalado en tu espacio de trabajo
+
+```BASH
+gh repo create $(basename "$PWD") --public --source=. --remote=main
+
+gh repo delete nestjs-microservices-build-and-deploy-scaleable-backend
 ```
 
 ## 1 - Introduction - optional
@@ -3027,5 +3039,992 @@ POST - http://localhost:4000/reservations
 ![](docs/images/img51.png)
 
 ![](docs/images/img52.png)
+
+## 6 - Production Deployment
+
+- https://www.tomray.dev/nestjs-docker-production
+- https://docs.nestjs.com/cli/monorepo
+- https://raulgf92-software.medium.com/npm-workspaces-microservices-6a13454937ab
+
+### 6.1 - Google Cloud Engine Setup
+
+![](docs/images/img53.png)
+
+![](docs/images/img54.png)
+
+![](docs/images/img55.png)
+
+https://console.cloud.google.com/artifacts?referrer=search&authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img56.png)
+
+https://console.cloud.google.com/artifacts/browse/civic-champion-398722?authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img57.png)
+
+![](docs/images/img58.png)
+
+Selecciona el repositorio y le da click Setup instructions
+
+```BASH
+gcloud auth configure-docker \
+    us-east4-docker.pkg.dev
+```
+
+![](docs/images/img59.png)
+
+https://cloud.google.com/sdk/docs
+
+![](docs/images/img60.png)
+
+https://cloud.google.com/sdk/docs/install-sdk
+
+![](docs/images/img61.png)
+
+![](docs/images/img62.png)
+
+https://cloud.google.com/sdk/auth_success
+
+![](docs/images/img63.png)
+
+![](docs/images/img64.png)
+
+![](docs/images/img65.png)
+
+![](docs/images/img66.png)
+
+Desactivar python desde microsoft store
+
+![](docs/images/img67.png)
+
+![](docs/images/img68.png)
+
+El id del proyecto demo-pczerox es el siguiente `civic-champion-39722`
+
+```BASH
+gcloud config set project civic-champion-39722
+```
+
+![](docs/images/img69.png)
+
+Más detalles en el siguiente enlace
+
+https://cloud.google.com/sdk/gcloud/reference/auth/application-default/login?authuser=1&hl=en&_gl=1*1ifydze*_ga*MjkwMDQyOTc1LjE2NzQxNjcwOTI.*_ga_WH2QY8WWF5*MTY5NDQ5MTQ1OS4xNS4xLjE2OTQ0OTE0ODIuMC4wLjA.&_ga=2.170836195.-290042975.1674167092
+
+![]()
+
+```BASH
+gcloud auth application-default login
+```
+
+![](docs/images/img70.png)
+
+![](docs/images/img71.png)
+
+![](docs/images/img72.png)
+
+![](docs/images/img73.png)
+
+https://cloud.google.com/sdk/auth_success
+
+![](docs/images/img63.png)
+
+```BASH
+gcloud auth login
+```
+
+![](docs/images/img75.png)
+
+```BASH
+gcloud artifacts repositories list
+```
+
+![](docs/images/img76.png)
+
+Setup instructions
+
+![](docs/images/img77.png)
+
+```BASH
+gcloud auth configure-docker \
+    us-east4-docker.pkg.dev
+
+gcloud auth configure-docker us-east4-docker.pkg.dev
+```
+
+![](docs/images/img78.png)
+
+![](docs/images/img79.png)
+
+```BASH
+docker build -t reservations -f Dockerfile ../../
+```
+
+https://console.cloud.google.com/artifacts/browse/civic-champion-398722?authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img80.png)
+
+`./apps/reservations/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+# Option 1 17/17
+COPY ../../package.json ./
+COPY ../../package-lock.json ./
+COPY ../../tsconfig.json ./
+COPY ../../nest-cli.json ./
+
+# Option 2 18/18
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json ./
+COPY nest-cli.json ./
+
+RUN npm install
+
+COPY . .
+
+RUN npm run build
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/reservations/main"]
+```
+
+Ejecutamos el siguiente comando en la terminal con el permiso del administrador
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/reservations
+
+docker build -t reservations -f Dockerfile ../../
+```
+
+![](docs/images/img81.png)
+
+https://console.cloud.google.com/artifacts/docker/civic-champion-398722/us-east4/reservations?authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img82.png)
+
+Ejecutamos el siguiente comando en el subdirectorio `reservations`
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/reservations
+
+docker tag reservations us-east4-docker.pkg.dev/civic-champion-398722/reservations/production
+```
+
+![](docs/images/img83.png)
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/reservations
+
+docker image push us-east4-docker.pkg.dev/civic-champion-398722/reservations/production
+```
+
+![](docs/images/img84.png)
+
+https://console.cloud.google.com/artifacts/docker/civic-champion-398722/us-east4/reservations?authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img85.png)
+
+### 6.2 - Productionize & Push Dockerfile
+
+- https://cloud.google.com/serverless
+- https://cloud.google.com/build
+
+`./apps/reservations/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+# Option 1
+COPY ../../package.json ./
+COPY ../../package-lock.json ./
+COPY ../../tsconfig.json ./
+COPY ../../nest-cli.json ./
+
+# Option 2
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json ./
+COPY nest-cli.json ./
+
+RUN npm install
+
+COPY apps/reservations apps/reservations
+COPY libs libs
+
+RUN npm run build
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/reservations/main"]
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/reservations
+
+docker build -t reservations -f Dockerfile ../../
+```
+
+![](docs/images/img86.png)
+
+`./libs/common/src/decorators/current-user.decorator.ts`
+
+```TS
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+import { UserDocument } from '../models/user.schema';
+
+const getCurrentUserByContext = (context: ExecutionContext): UserDocument => {
+  return context.switchToHttp().getRequest().user;
+};
+
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, context: ExecutionContext) =>
+    getCurrentUserByContext(context),
+);
+```
+
+`./libs/common/src/models/user.schema.ts`
+
+```TS
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { AbstractDocument } from '@app/common';
+
+@Schema({ versionKey: false })
+export class UserDocument extends AbstractDocument {
+  @Prop()
+  email: string;
+
+  @Prop()
+  password: string;
+}
+
+export const UserSchema = SchemaFactory.createForClass(UserDocument);
+```
+
+`./apps/auth/src/auth.service.ts`
+
+```TS
+import { Response } from 'express';
+import { JwtService } from '@nestjs/jwt';
+import { UserDocument } from '@app/common';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { TokenPayload } from './interfaces/token-payload.interface';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  async login(user: UserDocument, response: Response) {
+    const tokenPayload: TokenPayload = {
+      userId: user._id.toHexString(),
+    };
+
+    const expires = new Date();
+    expires.setSeconds(
+      expires.getSeconds() + this.configService.get('JWT_EXPIRATION'),
+    );
+
+    const token = this.jwtService.sign(tokenPayload);
+
+    response.cookie('Authentication', token, {
+      httpOnly: true,
+      expires,
+    });
+
+    return token;
+  }
+}
+```
+
+`./apps/auth/src/auth.controller.ts`
+
+```TS
+import { Response } from 'express';
+import { CurrentUser, UserDocument } from '@app/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, Post, Res, UseGuards } from '@nestjs/common';
+
+import { LocalAuthGuard } from './guards/local-auth.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+import { AuthService } from './auth.service';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @UseGuards(LocalAuthGuard)
+  @Post('login')
+  async login(
+    @CurrentUser() user: UserDocument,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const jwt = await this.authService.login(user, response);
+    response.send(jwt);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @MessagePattern('authenticate')
+  async authenticate(@Payload() data: any) {
+    return data.user;
+  }
+}
+```
+
+`./apps/auth/src/users/users.module.ts`
+
+```TS
+import { Module } from '@nestjs/common';
+import { DatabaseModule, UserDocument, UserSchema } from '@app/common';
+
+import { UsersController } from './users.controller';
+
+import { UsersService } from './users.service';
+
+import { UsersRepository } from './users.repository';
+
+@Module({
+  imports: [
+    DatabaseModule,
+    DatabaseModule.forFeature([
+      { name: UserDocument.name, schema: UserSchema },
+    ]),
+  ],
+  controllers: [UsersController],
+  providers: [UsersService, UsersRepository],
+  exports: [UsersService],
+})
+export class UsersModule {}
+```
+
+`./apps/auth/src/users/users.repository.ts`
+
+```TS
+import { Model } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { Injectable, Logger } from '@nestjs/common';
+import { AbstractRepository, UserDocument } from '@app/common';
+
+@Injectable()
+export class UsersRepository extends AbstractRepository<UserDocument> {
+  protected readonly logger = new Logger(UsersRepository.name);
+
+  constructor(@InjectModel(UserDocument.name) userModel: Model<UserDocument>) {
+    super(userModel);
+  }
+}
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/reservations
+
+docker build -t reservations -f Dockerfile ../../
+```
+
+![](docs/images/img81.png)
+
+`./apps/auth/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json tsconfig.json
+COPY nest-cli.json nest-cli.json
+
+RUN npm install
+
+COPY apps/auth apps/auth
+COPY libs libs
+
+# RUN cd apps/auth && npm install
+
+RUN npm run build auth
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/auth/main"]
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/auth
+
+docker build -t auth -f Dockerfile ../../
+```
+
+![](docs/images/img87.png)
+
+`./apps/notifications/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json tsconfig.json
+COPY nest-cli.json nest-cli.json
+
+RUN npm install
+
+COPY apps/notifications apps/notifications
+COPY libs libs
+
+# RUN cd apps/notifications && npm install
+
+RUN npm run build notifications
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/notifications/main"]
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/notifications
+
+docker build -t notifications -f Dockerfile ../../
+```
+
+![](docs/images/img88.png)
+
+`./apps/payments/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json tsconfig.json
+COPY nest-cli.json nest-cli.json
+
+RUN npm install
+
+COPY apps/payments apps/payments
+COPY libs libs
+
+# RUN cd apps/payments && npm install
+
+RUN npm run build payments
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/payments/main"]
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/payments
+
+docker build -t payments -f Dockerfile ../../
+```
+
+![](docs/images/img89.png)
+
+`./apps/auth/package.json`
+
+package.json
+
+```JSON
+{
+  "name": "@microservice/auth",
+  "version": "1.0.0",
+  "description": "Auth microservice",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@nestjs/jwt": "^10.1.1",
+    "@nestjs/passport": "^10.0.1",
+    "bcryptjs": "^2.4.3",
+    "passport": "^0.6.0",
+    "passport-jwt": "^4.0.1",
+    "passport-local": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.3",
+    "@types/passport-jwt": "^3.0.9",
+    "@types/passport-local": "^1.0.35"
+  }
+}
+```
+
+Ejecutamos el siguiente comando en la terminal
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/auth
+
+docker build -t auth -f Dockerfile ../../
+```
+
+![](docs/images/img90.png)
+
+`./apps/notifications/package.json`
+
+package.json
+
+```JSON
+{
+  "name": "@microservice/notifications",
+  "version": "1.0.0",
+  "description": "Notifications microservice",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "nodemailer": "^6.9.5"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.10"
+  }
+}
+```
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend/apps/notifications
+
+docker build -t notifications -f Dockerfile ../../
+```
+
+![](docs/images/img91.png)
+
+`./apps/payments/package.json`
+
+package.json
+
+```JSON
+{
+  "name": "@microservice/payments",
+  "version": "1.0.0",
+  "description": "Payments microservice",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "stripe": "^13.5.0"
+  }
+}
+```
+
+```BASH
+docker build -t payments -f Dockerfile ../../
+```
+
+![](docs/images/img92.png)
+
+### 6.3 - Automated CICD With CloudBuild
+
+`./apps/reservations/Dockerfile`
+
+```BASH
+FROM node:alpine AS development
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+COPY tsconfig.json tsconfig.json
+COPY nest-cli.json nest-cli.json
+
+RUN npm install
+
+COPY apps/reservations apps/reservations
+COPY libs libs
+
+RUN npm run build
+
+FROM node:alpine AS production
+
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+RUN npm install --prod
+
+COPY --from=development /usr/src/app/dist ./dist
+
+CMD ["node", "dist/apps/reservations/main"]
+```
+
+Así debe quedar nuestros archivos en cada microservicio
+
+![](docs/images/img93.png)
+
+Configurar el gitignore
+
+`.gitignore`
+
+```BASH
+# compiled output
+/dist
+**/node_modules
+```
+
+Hacemos la compilación en la terminal a nuestro docker compose
+
+```BASH
+# /d/IT/workshop/nest/nestjs-microservices-build-and-deploy-scaleable-backend
+
+docker-compose up --build
+```
+
+Revisamos nuestros artefactos en Artifact Registry
+
+https://console.cloud.google.com/artifacts?authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img94.png)
+
+![](docs/images/img95.png)
+
+Así procedemos a configurar nuestro Google Cloud Build para construir y desplegar tu aplicación
+
+Así es un modelo de lo que debe contener
+
+```YML
+steps:
+  # Construir la imagen de Docker
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/YOUR_PROJECT_ID/your-image-name', '.']
+
+  # Subir la imagen a Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/YOUR_PROJECT_ID/your-image-name']
+
+images: ['gcr.io/YOUR_PROJECT_ID/your-image-name']
+
+# Puedes agregar pasos adicionales aquí según tus necesidades.
+```
+
+Así podemos declarar nuestro cloud build
+
+`cloudbuild.yaml`
+
+```YML
+steps:
+  # Reservations
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        'us-east4-docker.pkg.dev/civic-champion-398722/reservations',
+        '-f',
+        'apps/reservations/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/reservations']
+
+  # Auth
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        'us-east4-docker.pkg.dev/civic-champion-398722/auth/production',
+        '-f',
+        'apps/auth/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/auth/production']
+
+  # Notifications
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production',
+        '-f',
+        'apps/notifications/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production']
+
+  # Payments
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        'us-east4-docker.pkg.dev/civic-champion-398722/payments/production',
+        '-f',
+        'apps/payments/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/payments/production']
+```
+
+Otra alternativa es esta
+
+`cloudbuild.yaml`
+
+```YML
+substitutions:
+  _ARTIFACT_REGISTRY: 'us-east4-docker.pkg.dev'
+  _PROJECT_ID: 'civic-champion-398722'
+  _URL: '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}'
+
+steps:
+  # Reservations
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        '${_URL}/reservations',
+        '-f',
+        'apps/reservations/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_URL}/reservations']
+
+  # Auth
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        '${_URL}/auth/production',
+        '-f',
+        'apps/auth/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_URL}/auth/production']
+
+  # Notifications
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        '${_URL}/notifications/production',
+        '-f',
+        'apps/notifications/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_URL}/notifications/production']
+
+  # Payments
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        '${_URL}/payments/production',
+        '-f',
+        'apps/payments/Dockerfile',
+        '.',
+      ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_URL}/payments/production']
+```
+
+En Cloud Build API, debemos habilitarlo
+
+https://console.cloud.google.com/marketplace/product/google/cloudbuild.googleapis.com?q=search&referrer=search&returnUrl=%2Fcloud-build%2Fbuilds%3Freferrer%3Dsearch%26authuser%3D1%26hl%3Den%26project%3Dcivic-champion-398722&authuser=1&hl=en&project=civic-champion-398722
+
+![](docs/images/img96.png)
+
+![](docs/images/img97.png)
+
+https://console.cloud.google.com/apis/api/cloudbuild.googleapis.com/metrics?project=civic-champion-398722
+
+![](docs/images/img98.png)
+
+https://console.cloud.google.com/cloud-build/dashboard?project=civic-champion-398722
+
+![](docs/images/img99.png)
+
+https://console.cloud.google.com/cloud-build/triggers;region=global/add?project=civic-champion-398722
+
+![](docs/images/img100.png)
+
+Esto se muestra porque hemos seleccionado el Repository del formulario de Cloud Build
+
+![](docs/images/img101.png)
+
+![](docs/images/img102.png)
+
+![](docs/images/img103.png)
+
+Seleccionamos el repositorio para Github
+
+https://github.com/PCZeroX/nestjs-microservices-build-and-deploy-scaleable-backend
+
+![](docs/images/img104.png)
+
+Seleccionamos el repositorio registrado para nuestro Cloud Build
+
+![](docs/images/img105.png)
+
+![](docs/images/img106.png)
+
+![](docs/images/img107.png)
+
+```BASH
+gh repo create $(basename "$PWD") --public --source=. --remote=main
+
+gh repo delete nestjs-microservices-build-and-deploy-scaleable-backend
+```
+
+Más detalles sobre expresiones regulares
+
+https://github.com/google/re2/wiki/Syntax
+
+![](docs/images/img108.png)
+
+https://console.cloud.google.com/cloud-build/triggers;region=global?project=civic-champion-398722
+
+![](docs/images/img109.png)
+
+https://console.cloud.google.com/cloud-build/dashboard?project=civic-champion-398722
+
+![](docs/images/img110.png)
+
+```BASH
+git branch -M master main
+
+git add
+git commit -m "6 - Production deployment - 6.3 Automated CI/CD with Google Cloud Build"
+
+git push
+```
+
+Revisar el dashboard cuando haya hecho un push del proyecto a repositorio de Github
+
+- https://console.cloud.google.com/cloud-build/dashboard?project=civic-champion-398722
+- https://github.com/PCZeroX/nestjs-microservices-build-and-deploy-scaleable-backend
 
 ---
