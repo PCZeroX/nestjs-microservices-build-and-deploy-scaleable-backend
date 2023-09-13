@@ -1,8 +1,3 @@
-substitutions:
-  _ARTIFACT_REGISTRY: 'us-east4-docker.pkg.dev'
-  _PROJECT_ID: 'civic-champion-398722'
-  _URL: '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}'
-
 steps:
   # Reservations
   - name: 'gcr.io/cloud-builders/docker'
@@ -10,13 +5,13 @@ steps:
       [
         'build',
         '-t',
-        '${_URL}/reservations',
+        'us-east4-docker.pkg.dev/civic-champion-398722/reservations',
         '-f',
         'apps/reservations/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '${_URL}/reservations']
+    args: ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/reservations']
 
   # Auth
   - name: 'gcr.io/cloud-builders/docker'
@@ -24,13 +19,14 @@ steps:
       [
         'build',
         '-t',
-        '${_URL}/auth/production',
+        'us-east4-docker.pkg.dev/civic-champion-398722/auth/production',
         '-f',
         'apps/auth/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '${_URL}/auth/production']
+    args:
+      ['push', 'us-east4-docker.pkg.dev/civic-champion-398722/auth/production']
 
   # Notifications
   - name: 'gcr.io/cloud-builders/docker'
@@ -38,13 +34,17 @@ steps:
       [
         'build',
         '-t',
-        '${_URL}/notifications/production',
+        'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production',
         '-f',
         'apps/notifications/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '${_URL}/notifications/production']
+    args:
+      [
+        'push',
+        'us-east4-docker.pkg.dev/civic-champion-398722/notifications/production',
+      ]
 
   # Payments
   - name: 'gcr.io/cloud-builders/docker'
@@ -52,10 +52,14 @@ steps:
       [
         'build',
         '-t',
-        '${_URL}/payments/production',
+        'us-east4-docker.pkg.dev/civic-champion-398722/payments/production',
         '-f',
         'apps/payments/Dockerfile',
         '.',
       ]
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '${_URL}/payments/production']
+    args:
+      [
+        'push',
+        'us-east4-docker.pkg.dev/civic-champion-398722/payments/production',
+      ]
